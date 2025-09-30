@@ -211,9 +211,9 @@ $$
 $$
 Where:
 
-* ( pos ) = position index (0,1,...,seq_len-1)
-* ( i ) = embedding dimension index (0,...,d_model-1)
-* ( d_\text{model} ) = embedding size
+* $ pos $ = position index (0,1,...,seq_len-1)
+* $ i $ = embedding dimension index (0,...,d_model-1)
+* $ d_\text{model} $ = embedding size
 
 ✅ This generates **unique vectors for each position**, with smooth variations across dimensions, allowing the model to encode order information.
 
@@ -310,5 +310,230 @@ x = x + self.pe[:, :x.shape[1], :].requires_grad(False)
 * Sinusoidal functions give **smooth, unique patterns** for each position.
 * `register_buffer` makes them **non-trainable but GPU-compatible**.
 * Forward pass **adds positional encoding** to token embeddings, ready for transformer layers.
+
+---
+
+
+
+
+
+
+# Layer Normalization in Transformers
+
+**Layer Normalization (LayerNorm)** is a technique used to **stabilize and accelerate training** by normalizing the inputs to a layer. Unlike Batch Normalization, which normalizes across the batch, LayerNorm normalizes across **features of a single token embedding**.
+
+Transformers process tokens **in parallel**. Each token embedding can have varying magnitudes across dimensions, which can make training unstable. LayerNorm ensures that each token embedding has:
+
+* **Zero mean**
+* **Unit variance**
+
+This helps with **faster convergence**, better gradient flow, and improved model stability.
+
+---
+
+## 🔹 Mathematical Formula
+
+Given a token embedding vector ( \mathbf{x} \in \mathbb{R}^{d} ) (with `d_model` features):
+
+1. Compute **mean**:
+$
+[
+\mu = \frac{1}{d} \sum_{i=1}^{d} x_i
+]
+$
+2. Compute **standard deviation**:
+$
+[
+\sigma = \sqrt{\frac{1}{d} \sum_{i=1}^{d} (x_i - \mu)^2}
+]
+$
+3. Normalize the embedding:
+$
+[
+\hat{x}_i = \frac{x_i - \mu}{\sigma + \epsilon}
+]
+$
+4. Apply **learnable scale and shift**:
+$
+[
+y_i = \alpha \hat{x}_i + \beta
+]
+$
+Where:
+
+* $ \alpha $ = **learnable scale parameter** (`nn.Parameter`)
+* $ \beta $ = **learnable shift/bias parameter** (`nn.Parameter`)
+* $ \epsilon $ = small constant to prevent division by zero
+
+✅ The result is a normalized token embedding with **controllable magnitude and shift**, allowing the network to adjust normalization if needed.
+
+---
+
+## 🔹 Key Concepts in Implementation
+
+### **a) `dim=-1`**
+
+* Normalization is done **across the last dimension** (i.e., across features of each token embedding).
+* For input shape `(batch_size, seq_len, d_model)`, this means each token embedding of size `d_model` is normalized independently.
+
+### **b) `keepdim=True`**
+
+* Keeps the normalized dimension for broadcasting during subtraction/division.
+* Without it, mean and std would have shape `(batch_size, seq_len)` → cannot broadcast to `(batch_size, seq_len, d_model)`.
+
+### **c) `nn.Parameter`**
+
+* `alpha` and `bias` are **learnable parameters**.
+* PyTorch tracks gradients for them, so they are updated during training.
+* This allows LayerNorm to **scale and shift** normalized embeddings, giving flexibility to the model.
+
+---
+
+## 🔹 Example Calculation
+
+Suppose a token embedding:
+
+```
+x = [1.0, 2.0, 3.0]
+```
+
+1. **Mean**:
+   $ \mu = (1 + 2 + 3)/3 = 2 $
+
+2. **Standard deviation**:
+   $ \sigma = \sqrt{((1-2)^2 + (2-2)^2 + (3-2)^2)/3} = 0.8165 $
+
+3. **Normalized vector**:
+$
+   [
+   \hat{x} = [(1-2)/0.8165, (2-2)/0.8165, (3-2)/0.8165] = [-1.2247, 0, 1.2247]
+   ]
+$
+4. **After learnable scale and shift** (`alpha=1, beta=0` initially):
+$
+   [
+   y = [-1.2247, 0, 1.2247]
+   ]
+$
+✅ Output now has **zero mean** and **unit variance**.
+
+---
+
+## 🔹 Visual Summary
+
+```
+Input Token Embedding:        Normalized + Scaled/Shifted Output:
+[1.0, 2.0, 3.0]             [-1.2247, 0, 1.2247]
+[2.0, 0.5, 1.5]             [ 1.1355, -1.1136, -0.0219]
+...
+```
+
+* Each token embedding is **normalized independently across its features**.
+* LayerNorm ensures consistent scale for activations across layers, helping the network learn more effectively.
+
+---
+
+## ✅ Summary
+
+* LayerNorm stabilizes training by normalizing **token embeddings across features**.
+* `dim=-1` ensures normalization along the feature axis; `keepdim=True` ensures correct broadcasting.
+* Learnable parameters `alpha` and `bias` allow the model to adapt normalization as needed.
+* Essential in Transformer architectures for **stable, efficient, and consistent training**.
+
+
+
+---
+
+
+# FeedForward Block in Transformers
+
+The **FeedForward Block** is a key component in Transformer architectures. After attention layers, each token embedding is passed through a **position-wise fully connected network** to increase model capacity and allow **non-linear feature transformations**.
+
+* Attention layers capture **relationships between tokens**, but do **not mix features within a token**.
+* The feedforward network (FFN) allows the model to **process each token embedding individually** and apply **non-linear transformations**.
+* Helps the model **learn complex mappings** beyond linear attention.
+
+---
+
+## 🔹 Architecture and Shape Explanation
+
+### **Forward pass shapes:**
+
+```
+Input:  x ∈ ℝ^(Batch, seq_len, d_model)
+Step 1: Linear_1 → ℝ^(Batch, seq_len, d_ff)
+Step 2: ReLU + Dropout
+Step 3: Linear_2 → ℝ^(Batch, seq_len, d_model)
+Output: Same shape as input
+```
+
+**Why these shapes?**
+
+1. **`d_model → d_ff`**:
+
+   * Expands the embedding to a higher-dimensional space (`d_ff > d_model`) to capture richer, more complex features.
+   * Think of it like projecting a 3D point into a higher-dimensional space to make it more linearly separable.
+
+2. **`d_ff → d_model`**:
+
+   * Projects it back to the original embedding size so it can be **added back via residual connection** in the Transformer.
+   * Ensures the feedforward block is **position-wise** and does not change the overall shape of the sequence representation.
+
+---
+
+## 🔹 Mathematical Formula
+
+For a token embedding $ x \in \mathbb{R}^{d_\text{model}} $:
+$
+\text{FFN}(x) = W_2 (\text{Dropout}(\text{ReLU}(W_1 x + b_1))) + b_2
+$
+Where:
+
+* $ W_1 \in \mathbb{R}^{d_\text{ff} \times d_\text{model}} ,  b_1 \in \mathbb{R}^{d_\text{ff}} $
+* $ W_2 \in \mathbb{R}^{d_\text{model} \times d_\text{ff}} ,  b_2 \in \mathbb{R}^{d_\text{model}} $
+* ReLU introduces **non-linearity**
+* Dropout provides **regularization**
+
+✅ This is applied **independently to each token** in the sequence (hence shape `(Batch, seq_len, ...)`).
+
+---
+
+## 🔹 Example
+
+Suppose we have:
+
+* Batch size = 2
+* Sequence length = 3
+* `d_model = 4`
+* `d_ff = 8`
+
+```
+Input x (2, 3, 4):
+
+[
+ [[0.1, 0.2, 0.3, 0.4],
+  [0.5, 0.6, 0.7, 0.8],
+  [0.9, 1.0, 1.1, 1.2]],
+
+ [[1.3, 1.4, 1.5, 1.6],
+  [1.7, 1.8, 1.9, 2.0],
+  [2.1, 2.2, 2.3, 2.4]]
+]
+```
+
+1. **Linear_1 (`d_model → d_ff`)** → shape `(2, 3, 8)`
+2. **ReLU + Dropout** → elementwise non-linearity and random regularization
+3. **Linear_2 (`d_ff → d_model`)** → shape `(2, 3, 4)`
+
+✅ Output has **same shape as input** and is ready for **residual connection + LayerNorm** in the Transformer.
+
+---
+
+## ✅ Summary
+
+* FeedForward blocks are **position-wise MLPs** applied independently to each token.
+* `d_model → d_ff → d_model` allows **expansion to learn richer features** and projection back for residual connection.
+* ReLU introduces **non-linear transformation**, and Dropout provides **regularization**.
+* Maintains the **original sequence shape**, ensuring it can be added back to attention outputs in Transformers.
 
 ---

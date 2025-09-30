@@ -39,3 +39,34 @@ class PositionalEmbedding(nn.Module):
     def forward(self, x):
         x = x + (self.pe[:, :x.shape[1], :]).requires_grad(False)
         return self.dropout(x)
+    
+
+
+
+class LayerNormalization(nn.Module):
+    def __init__(self, eps: float = 10**-6) -> None:
+        super().__init__()
+        self.eps = eps
+        self.alpha = nn.Parameter(torch.ones(1)) # Multiplied
+        self.bias = nn.Parameter(torch.zeros(1)) # Added
+
+    def forward(self, x):
+        mean = x.mean(dim = -1, keepdim = True)
+        std = x.std(dim = -1, keepdim = True)
+        return self.alpha * (x - mean) / (std + self.eps) + self.bias
+
+
+
+class FeedForwardBlock(nn.Module):
+    def __init__(self, d_model: int, d_ff: int, dropout: float) -> None:
+        super().__init__()
+        self.linear_1 = nn.Linear(in_features=d_model, out_features=d_ff) # W1 and b1
+        self.dropout = dropout
+        self.linear_2 = nn.Linear(in_features=d_ff, out_features= d_model)
+
+    def forward(self, x):
+        # (Batch, seq_len, d_model) -> (Batch, seq_len, d_ff) -> (Batch, seq_len, d_model) 
+        return self.linear_2(self.dropout(torch.relu(self.linear_1(x))))
+    
+
+        
