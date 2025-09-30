@@ -537,3 +537,118 @@ Input x (2, 3, 4):
 * Maintains the **original sequence shape**, ensuring it can be added back to attention outputs in Transformers.
 
 ---
+
+
+# Multi-Head Attention in Transformers
+
+**Multi-Head Attention (MHA)** allows the Transformer to **attend to different parts of the sequence simultaneously**, capturing diverse relationships between tokens. Each “head” learns a different attention pattern.
+
+* Standard attention computes relationships between **queries, keys, and values** but can only focus in **one representation subspace**.
+* Multi-head attention splits the embedding into multiple subspaces (`head`) to capture **different types of dependencies** in parallel.
+* Enables richer modeling of **contextual relationships** between tokens.
+
+---
+
+## 🔹 Key Components
+
+### **a) Linear Projections**
+
+For input token embeddings (X \in \mathbb{R}^{seq_len \times d_\text{model}}), we compute:
+
+$
+Q = X W_Q, \quad K = X W_K, \quad V = X W_V
+$
+
+Where:
+
+* $ W_Q, W_K, W_V \in \mathbb{R}^{d_\text{model} \times d_\text{model}} $
+* Queries (Q), Keys (K), Values (V) all have shape `(Batch, seq_len, d_model)` initially.
+
+---
+
+### **b) Splitting into multiple heads**
+
+* `d_model` is divided by `head` → `d_k = d_model / head`
+* Each head has its **own subspace**, shape `(Batch, head, seq_len, d_k)`
+
+This is done via:
+
+```
+query = query.view(batch, seq_len, head, d_k).transpose(1, 2)
+key   = key.view(batch, seq_len, head, d_k).transpose(1, 2)
+value = value.view(batch, seq_len, head, d_k).transpose(1, 2)
+```
+
+✅ Now, attention is computed **independently for each head**.
+
+---
+
+## 🔹 Scaled Dot-Product Attention
+
+For each head, attention is computed as:
+
+$
+\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{Q K^\top}{\sqrt{d_k}}\right) V
+$
+
+* $ Q K^\top $ → computes similarity between tokens
+* Scale by $ \frac{1}{\sqrt{d_k}} $ to prevent large dot products
+* Softmax → converts scores to probabilities
+* Multiply by V → weighted sum of values
+
+If a mask is provided (e.g., for padding or causal attention), the scores for masked positions are set to (-\infty) before softmax.
+
+---
+
+## 🔹 Combining Heads
+
+After attention for each head:
+
+1. Transpose back: `(Batch, head, seq_len, d_k)` → `(Batch, seq_len, head, d_k)`
+2. Concatenate all heads → `(Batch, seq_len, d_model)`
+
+This gives a **single combined representation** that encodes multiple attention patterns.
+
+3. Multiply by output weight `W_O`:
+
+$
+\text{Output} = \text{ConcatHeads} \cdot W_O
+$
+
+* $ W_O \in \mathbb{R}^{d_\text{model} \times d_\text{model}} $
+* Ensures output has **same shape as input** `(Batch, seq_len, d_model)` for residual connections.
+
+---
+
+## 🔹 Forward Pass Shapes
+
+| Step                           | Shape                             |
+| ------------------------------ | --------------------------------- |
+| Input embeddings `x`           | `(Batch, seq_len, d_model)`       |
+| Linear projections Q/K/V       | `(Batch, seq_len, d_model)`       |
+| Split heads                    | `(Batch, head, seq_len, d_k)`     |
+| Attention scores               | `(Batch, head, seq_len, seq_len)` |
+| Weighted sum (attended values) | `(Batch, head, seq_len, d_k)`     |
+| Concatenate heads              | `(Batch, seq_len, d_model)`       |
+| Final Linear `W_O`             | `(Batch, seq_len, d_model)`       |
+
+---
+
+## 🔹 Intuition
+
+* **Each head** can attend to different parts of the sequence: one might focus on previous tokens, another on syntactic dependencies.
+* **Splitting and projecting** into multiple heads allows the model to **capture diverse relationships simultaneously**.
+* **Output projection (`W_O`)** ensures that combined attention is compatible with the rest of the Transformer (residual connections + layer norm).
+
+---
+
+## ✅ Summary
+
+* Multi-head attention enables **parallel, multi-subspace attention** on token embeddings.
+* Scaled dot-product attention computes **weighted sums of value vectors** based on query-key similarity.
+* Heads are concatenated and projected back to `d_model` to **preserve input shape**.
+* Essential for **context-aware embeddings** in Transformers.
+
+---
+
+
