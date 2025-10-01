@@ -650,5 +650,595 @@ $
 * Essential for **context-aware embeddings** in Transformers.
 
 ---
+]
+
+# Residual Connection + Layer Normalization in Transformers
+
+The `ResidualConnection` block wraps around sublayers (like **Multi-Head Attention** or **Feed Forward**) to stabilize training and preserve information flow.
+
+* Deep networks suffer from **vanishing gradients** and unstable training.
+* **Residual connections** (introduced in ResNets) let layers learn corrections instead of full transformations.
+* **Layer normalization** keeps values stable by normalizing across features.
+* **Dropout** prevents overfitting.
+
+Together, they make Transformer training **stable, faster, and more robust**.
+
+---
+
+## 🔹 Formula
+
+For input $x$ and sublayer function $ \text{sublayer}(\cdot) $:
+
+$
+\text{Output} = x + \text{Dropout}(\text{sublayer}(\text{LayerNorm}(x)))
+$
+
+* $x$: Input tensor
+* `LayerNorm(x)`: Normalizes activations to stabilize learning
+* `sublayer`: Can be **MultiHeadAttention** or **FeedForward**
+* `Dropout`: Randomly drops activations during training
+* Residual: Adds original input (x) back to the sublayer output
+
+---
+
+## 🔹 Implementation Details
+
+### **a) Layer Normalization**
+
+Normalizes input across the **embedding dimension**:
+
+$
+\text{LayerNorm}(x) = \frac{x - \mu}{\sigma + \epsilon} \cdot \gamma + \beta
+$
+
+* $\mu$: mean of features
+* $\sigma$: standard deviation of features
+* $\gamma, \beta$: learnable parameters
+
+✅ Ensures stable scale across tokens.
+
+---
+
+### **b) Residual Connection**
+
+Instead of forcing the sublayer to learn **entire mapping**, we just learn:
+
+$
+F(x) + x
+$
+
+This allows **gradient flow** directly through the skip path.
+
+---
+
+### **c) Dropout**
+
+Applied to the sublayer’s output before adding to (x).
+Reduces **overfitting** by preventing reliance on specific neurons.
+
+---
+
+## 🔹 Forward Pass Shapes
+
+| Step                  | Shape                       |
+| --------------------- | --------------------------- |
+| Input $x$             | `(Batch, seq_len, d_model)` |
+| LayerNorm($x$)          | `(Batch, seq_len, d_model)` |
+| Sublayer( $LN(x) $)       | `(Batch, seq_len, d_model)` |
+| Dropout(...)          | `(Batch, seq_len, d_model)` |
+| Residual add with $x$ | `(Batch, seq_len, d_model)` |
+
+✅ The shape is preserved → makes residual connections possible.
+
+---
+
+## 🔹 Intuition
+
+* Residuals allow **deeper networks** without gradient vanishing.
+* LayerNorm ensures **numerical stability** across long sequences.
+* Dropout adds **regularization**.
+* Together, this makes training Transformers **efficient and stable**.
+
+---
+
+## ✅ Summary
+
+* **Residual**: keeps original signal + learned corrections.
+* **LayerNorm**: normalizes across features per token.
+* **Dropout**: improves generalization.
+* Used around **each sublayer** in the Transformer (Attention & FeedForward).
+
+---
+
+# Transformer Encoder Block & Encoder
+
+The **EncoderBlock** and **Encoder** form the foundation of the Transformer. They combine **Self-Attention**, **Feed Forward networks**, and **Residual Connections** to build contextualized representations of sequences.
+
+---
+
+## 🔹 Encoder Block
+
+### **Structure**
+
+Each `EncoderBlock` contains:
+
+1. **Multi-Head Self-Attention** (with masking)
+2. **Feed Forward Network**
+3. **Residual Connections + Layer Normalization**
+
+---
+
+### **Formula**
+
+For input $x$ and mask $M$:
+
+$
+x' = x + \text{Dropout}(\text{MHA}(\text{LayerNorm}(x), M))
+$
+
+$
+x'' = x' + \text{Dropout}(\text{FFN}(\text{LayerNorm}(x')))
+$
+
+Where:
+
+* MHA = Multi-Head Self-Attention
+* FFN = Feed Forward Network
+* Residual + LayerNorm = stability + gradient flow
+* $M$ = attention mask (explained below 👇)
+
+---
+
+### **Why Do We Need Masking?**
+
+In **attention**, we compute:
+
+$
+\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}} + M\right)V
+$
+
+* Without masking → every token attends to every other token.
+* With masking → we control **which tokens are visible**.
+
+#### ✅ Types of Masks
+
+1. **Padding Mask**
+
+   * Used in the **Encoder**.
+   * Ensures the model ignores `<PAD>` tokens (added to equalize sequence lengths).
+   * Prevents attention from wasting capacity on meaningless padding.
+
+   Example:
+
+   ```
+   Input: ["I", "love", "AI", "<PAD>", "<PAD>"]
+   Mask:  [1,   1,     1,      0,      0 ]
+   ```
+
+   Attention scores for `<PAD>` will be set to `-∞` before softmax, so probability → 0.
+
+2. **Causal Mask (Look-Ahead Mask)**
+
+   * Used in the **Decoder**.
+   * Ensures each position only attends to **previous tokens** (important in autoregressive generation).
+   * Prevents “cheating” by looking at future tokens.
+
+---
+
+### **Intuition**
+
+* **Padding Mask**: “Don’t pay attention to fake/padded tokens.”
+* **Causal Mask**: “Only attend to the past, not the future.”
+* Together, they make attention **valid, efficient, and meaningful**.
+
+---
+
+## 🔹 Encoder
+
+The **Encoder** stacks multiple `EncoderBlock`s and applies a final **LayerNorm**.
+
+### **Formula**
+
+For $L$ layers:
+
+$
+x^{(0)} = \text{Input}
+$
+
+$
+x^{(l)} = \text{EncoderBlock}^{(l)}(x^{(l-1)}, M), \quad l = 1 \dots L
+$
+
+$
+\text{Output} = \text{LayerNorm}(x^{(L)})
+$
+
+Where $M$ = padding mask.
+
+---
+
+### **Shapes**
+
+| Step                    | Shape                       |
+| ----------------------- | --------------------------- |
+| Input `x`               | `(Batch, seq_len, d_model)` |
+| After Block 1           | `(Batch, seq_len, d_model)` |
+| After Block 2           | `(Batch, seq_len, d_model)` |
+| ... After L blocks      | `(Batch, seq_len, d_model)` |
+| Final Normalized Output | `(Batch, seq_len, d_model)` |
+
+---
+
+## 🔹 Intuition
+
+* **Self-Attention** builds contextualized embeddings (each token attends to others).
+* **Masking** ensures irrelevant tokens (like padding) are ignored.
+* **Residual + LayerNorm** make training stable.
+* Stacking blocks lets the encoder build **hierarchical sequence representations**.
+
+---
+
+## ✅ Summary
+
+* **EncoderBlock** = Self-Attention + FeedForward + residuals.
+* **Encoder** = Stack of EncoderBlocks + final normalization.
+* **Masking** ensures attention ignores padding and maintains valid dependencies.
+
+---
+
+# Transformer Decoder Block & Decoder
+
+The **Decoder** is the second half of the Transformer. It takes **encoder outputs** and **target tokens** to generate predictions step by step.
+
+---
+
+## 🔹 Decoder Block
+
+Each `DecoderBlock` has **3 main parts**:
+
+1. **Masked Self-Attention** (over target sequence → ensures autoregressive generation).
+2. **Cross-Attention** (attends to encoder outputs → lets the decoder use source information).
+3. **Feed Forward Network** (applies non-linear transformation).
+
+Each part is wrapped with **Residual + LayerNorm**.
+
+---
+
+### **Formula**
+
+For input $x$ (decoder input embeddings) and encoder output $E$:
+
+1. **Masked Self-Attention**
+$
+   x' = x + \text{Dropout}(\text{MHA}*{\text{self}}(\text{LayerNorm}(x), M*{\text{tgt}}))
+$
+
+Here $M_{\text{tgt}}$ = **causal mask** → prevents attending to future tokens.
+
+2. **Cross-Attention**
+   $
+   x'' = x' + \text{Dropout}(\text{MHA}*{\text{cross}}(\text{LayerNorm}(x'), E, E, M*{\text{src}}))
+   $
+
+Here $M_{\text{src}}$ = **padding mask** for encoder outputs.
+
+3. **Feed Forward Network**
+   $
+   x''' = x'' + \text{Dropout}(\text{FFN}(\text{LayerNorm}(x'')))
+   $
+
+---
+
+### **Why Two Types of Attention?**
+
+* **Self-Attention (Decoder side)**: Looks at already generated target tokens, but **causally masked** so token $t$ only attends to $[0, …, t]$.
+* **Cross-Attention**: Lets the decoder attend to encoder outputs → links source and target.
+* Together: Decoder can **remember past target words** while **referencing the input sequence**.
+
+---
+
+### **Why Masking in Decoder?**
+
+1. **Causal Mask (Target Mask)**
+
+   * Ensures autoregressive generation.
+   * Example: When predicting the 4th word, only first 3 words are visible.
+   * Prevents "cheating" by looking at future words.
+
+   ```
+   Target: [I, love, AI, models]
+   At step 3 ("AI"), model can only see [I, love].
+   ```
+
+2. **Source Mask**
+
+   * Same as in Encoder → prevents attending to `<PAD>` tokens in encoder outputs.
+
+---
+
+## 🔹 Decoder
+
+The `Decoder` stacks multiple `DecoderBlock`s and applies a final **LayerNorm**.
+
+### **Formula**
+
+$
+x^{(0)} = \text{Input (shifted target embeddings)}
+$
+
+$
+x^{(l)} = \text{DecoderBlock}^{(l)}(x^{(l-1)}, E, M_{\text{src}}, M_{\text{tgt}})
+$
+
+$
+\text{Output} = \text{LayerNorm}(x^{(L)})
+$
+
+Where:
+
+* $E$ = encoder outputs
+* $M_{\text{src}}$ = source padding mask
+* $M_{\text{tgt}}$ = causal + padding mask for target
+
+---
+
+## 🔹 Shapes
+
+| Step                                   | Shape                           |
+| -------------------------------------- | ------------------------------- |
+| Input (Decoder Embeddings)             | `(Batch, tgt_seq_len, d_model)` |
+| After Masked Self-Attn                 | `(Batch, tgt_seq_len, d_model)` |
+| After Cross-Attn (with encoder output) | `(Batch, tgt_seq_len, d_model)` |
+| After FFN                              | `(Batch, tgt_seq_len, d_model)` |
+| After L blocks                         | `(Batch, tgt_seq_len, d_model)` |
+| Final Output (normalized)              | `(Batch, tgt_seq_len, d_model)` |
+
+---
+
+## 🔹 Intuition
+
+* **Masked Self-Attention**: Decoder builds up its own context one token at a time.
+* **Cross-Attention**: Decoder aligns target tokens with encoder’s source representation.
+* **Residual + LayerNorm**: Stabilize training.
+* **Stacking Layers**: Builds hierarchical understanding for text generation.
+
+---
+
+## ✅ Summary
+
+* **DecoderBlock** = Masked Self-Attn + Cross-Attn + FFN.
+* **Decoder** = Stack of DecoderBlocks + final normalization.
+* **Masking is critical** →
+
+  * Target mask (causal) → ensures autoregressive left-to-right generation.
+  * Source mask → ignores padding in encoder outputs.
+
+---
+
+Perfect 👍 let’s break this down like we did for embeddings — step by step explanation, **without PyTorch implementation** (since you already have it), and I’ll also explain **what `dim = -1` means**.
+
+---
+
+#  Projection Layer (a.k.a. Output Layer in Transformers)
+
+## 🔹 Why Projection is Needed
+
+* The transformer processes tokens into hidden vectors of size `d_model` (e.g., 512 or 768).
+* But the final output must be a **probability distribution over the vocabulary** (say vocab size = 30,000).
+* So we need a projection from **d_model → vocab_size**.
+* This is done by a **linear layer (matrix multiplication + bias)**.
+
+Mathematically:
+$
+\text{logits} = X \cdot W + b
+$
+
+Where:
+
+* $X$ = hidden states → shape: **(batch, seq_len, d_model)**
+* $W$ = projection weights → shape: **(d_model, vocab_size)**
+* $b$ = bias → shape: **(vocab_size, )**
+* Output = **(batch, seq_len, vocab_size)**
+
+---
+
+## 🔹 Why Softmax (and log_softmax) is Applied
+
+* After projection, we have **raw scores (logits)** for each token in the vocabulary.
+* To interpret them as probabilities, we apply **softmax**:
+
+$
+P(y_t = k \mid X) = \frac{e^{\text{logit}_k}}{\sum_j e^{\text{logit}_j}}
+$
+
+* In practice, PyTorch often uses **`log_softmax`** because:
+
+  * It is numerically more stable.
+  * Training with **negative log-likelihood loss (NLLLoss)** expects log probabilities.
+
+So the output is:
+$
+\text{log_probs} = \text{log_softmax}(\text{proj}(x), ; \text{dim=-1})
+$
+
+---
+
+## 🔹 What does `dim = -1` mean?
+
+* `dim=-1` tells PyTorch **along which axis to apply softmax**.
+* `-1` means **the last dimension of the tensor** (Python indexing rule).
+
+Since the output shape is:
+**(batch, seq_len, vocab_size)**
+
+* `dim=-1` → softmax is applied **across the vocab dimension**.
+* This ensures that for each token position, the sum of probabilities over all vocabulary words = **1**.
+
+Example:
+
+If output = `(2, 5, 10000)`
+
+* batch = 2
+* seq_len = 5
+* vocab_size = 10000
+
+Then softmax is applied across those **10000 values per token position**, making them valid probabilities.
+
+---
+
+## 🔹 Without dim=-1 (wrong case)
+
+* If you applied softmax on `dim=1` (sequence dimension), you’d get probabilities across sequence length (nonsense).
+* If you applied on `dim=0` (batch), you’d normalize across different samples (also nonsense).
+
+Hence, `dim=-1` is **critical**:
+It ensures we normalize **only across the vocabulary dimension**, which is what we need in language modeling.
+
+---
+
+✅ **Summary**:
+
+* Projection layer maps hidden vectors → vocabulary logits.
+* `log_softmax` converts logits → log-probabilities (stable training).
+* `dim=-1` ensures normalization is applied across the **vocab dimension**, not batch or sequence.
+
+---
 
 
+#  **Transformer Model**
+
+This `Transformer` class combines **Encoder + Decoder + Input Embeddings + Positional Encodings + Projection Layer** into the complete seq2seq model.
+
+---
+
+## 1. **Inputs & Components**
+
+* **Encoder**: Encodes the source sequence into contextual representations.
+* **Decoder**: Generates the target sequence step by step, attending to both its own past outputs and the encoder outputs.
+* **Embeddings**:
+
+  * `src_embed`: Converts source tokens → dense vectors.
+  * `tgt_embed`: Converts target tokens → dense vectors.
+* **Positional Encodings**:
+
+  * `src_pos`: Adds order information to source embeddings.
+  * `tgt_pos`: Adds order info to target embeddings.
+* **Projection Layer**: Maps decoder outputs → vocabulary probabilities.
+
+So the Transformer = **[Embeddings + Positional Encoding] → Encoder → Decoder → Projection → Probabilities**.
+
+---
+
+## 2. **encode()**
+
+```python
+def encode(self, src, src_mask):
+    src = self.src_embed(src)          # Token → Vector
+    src = self.src_pos(src, src_mask)  # Add positional encoding
+    return self.encoder(src, src_mask) # Encoder outputs
+```
+
+* Takes a source sentence.
+* Converts it into embeddings + adds position info.
+* Runs through **encoder stack**.
+* Returns **encoder outputs**, which summarize the entire source sequence.
+
+---
+
+## 3. **decode()**
+
+```python
+def decode(self, encoder_output, src_mask, tgt, tgt_mask):
+    tgt = self.tgt_embed(tgt)          # Token → Vector
+    tgt = self.tgt_pos(tgt)            # Add positional encoding
+    return self.decoder(tgt, encoder_output, src_mask, tgt_mask)
+```
+
+* Takes:
+
+  * `encoder_output` (from `encode()`).
+  * Partial target sequence (so far generated).
+  * `tgt_mask` (causal mask → ensures decoder can’t peek at future tokens).
+* Runs through **decoder stack**:
+
+  * First attends to itself (**masked self-attention**).
+  * Then attends to encoder outputs (**cross-attention**).
+* Produces decoder hidden states.
+
+---
+
+## 4. **project()**
+
+```python
+def project(self, x):
+    return self.projection_layer(x)
+```
+
+* Maps decoder hidden states → logits → log-probabilities over target vocabulary.
+* This is the final step before sampling/greedy decoding/beam search.
+
+---
+
+## 5. **BuildTransformer Function**
+
+This function actually **constructs the Transformer architecture**.
+
+### (a) Embedding Layers
+
+* `InputEmbeddings(d_model, vocab_size)`
+* Learnable embeddings for both **src** and **tgt** vocabularies.
+
+### (b) Positional Encoding
+
+* `PositionalEncoding(d_model, seq_len, dropout)`
+* Since transformers have no recurrence, positional encoding injects **order info**.
+
+### (c) Encoder Blocks
+
+* Repeats `N` times:
+
+  1. **Multi-Head Self-Attention** → lets tokens attend to each other.
+  2. **Feed Forward Block** → adds depth & non-linearity.
+  3. **Residual connections + LayerNorm** inside `EncoderBlock`.
+
+### (d) Decoder Blocks
+
+* Repeats `N` times:
+
+  1. **Masked Multi-Head Self-Attention** → attends only to past tokens.
+  2. **Cross-Attention** → attends to encoder outputs.
+  3. **Feed Forward Block**.
+  4. **Residual + LayerNorm**.
+
+### (e) Encoder & Decoder
+
+* Wrap blocks in `Encoder` and `Decoder`.
+
+### (f) Projection Layer
+
+* `ProjectionLayer(d_model, tgt_vocab_size)` converts hidden states to vocab logits.
+
+### (g) Xavier Initialization
+
+* Applies `nn.init.xavier_uniform_` to all weight matrices.
+* Ensures stable variance propagation during training.
+
+---
+
+## 6. **Overall Workflow**
+
+1. Input sequence (src) → **Encoder** produces context.
+2. Partial target sequence (tgt so far) → **Decoder** (with masking + cross-attention).
+3. Decoder output → **Projection Layer** → vocab probabilities.
+4. Next token predicted → fed back into decoder → repeat.
+
+---
+
+✅ **Summary:**
+
+* The Transformer is a **seq2seq architecture**: encoder encodes, decoder decodes with attention.
+* `BuildTransformer` constructs it by stacking encoder/decoder blocks, embeddings, and projection.
+* `encode()` handles source input, `decode()` handles target prediction, `project()` maps to vocab.
+* Key ideas: **self-attention, cross-attention, masking, positional encoding, projection**.
+
+---
